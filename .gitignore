@@ -1,0 +1,8 @@
+# Ignore everything by default; this repo tracks planning docs and code only.
+# All data files (raw CSVs, xlsx, derived data/) stay local and untracked.
+*
+
+!/*.md
+!/scripts/
+!/scripts/**
+!.gitignore
