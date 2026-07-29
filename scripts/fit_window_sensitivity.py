@@ -95,7 +95,10 @@ def main():
                      f"95% CI=[{meta['ci_low']:.6f}, {meta['ci_high']:.6f}]  "
                      f"z={meta['z']:.3f}  I2={meta['i2']:.1f}%")
         out_path = os.path.join(ROOT, "data", f"window_sensitivity_forest_{wname}.png")
-        make_forest_plot(per_rider, meta, out_path=out_path, exposure_label=spec["label"])
+        make_forest_plot(
+            per_rider, meta, out_path=out_path,
+            xlabel=f"PM2.5 coefficient on response speed (Hz per µg/m³), {spec['label']}",
+        )
         lines.append(f"  Forest plot: {out_path}")
 
     lines.append("")

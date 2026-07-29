@@ -1,20 +1,22 @@
 """Robustness check (PLAN.md #6): is the PM2.5-performance relationship
-actually linear, or is the linear primary/secondary models' assumption
-hiding a threshold/saturation effect?
+actually linear, or is a threshold/saturation effect being missed?
 
-Per-rider quartile binning (each rider's own sessions split into Q1-Q4 by
-their own PM2.5_within distribution -- preserves the within-subjects
-framing, same logic as the primary analysis) would leave only ~20-25
-sessions per rider per bin, too little to fit reliably per rider. So
-this check is done at the pooled level (more data to work with), same
-structure as the PLAN.md #5 secondary model (Mundlak decomposition,
-random intercept per rider) but with PM2.5 entered as quartile dummies
-instead of a continuous linear term, plus an AIC comparison against the
-continuous version.
+Consistent with the primary analysis (§4) and unlike an earlier version of
+this script, this fits a quadratic term *per rider* and meta-analyzes it
+-- not a pooled/common-effect model. A per-rider quadratic term needs
+only one extra parameter (vs. e.g. 3 for quartile dummies), which is
+feasible even at ~90 sessions/rider; quartile dummies were not, which is
+why an earlier version of this check fell back to pooling across riders
+-- the same pooling that diluted §5's Model A relative to the primary
+per-rider result. This version avoids that trade-off entirely.
+
+The quadratic term uses pm25_within (rider-mean-centered exposure)
+rather than raw pm25_mean_sameday, since centering around zero is what
+keeps the linear and quadratic terms from being highly collinear.
 
 Requires scripts/build_pvt_aq_dataset.py to have been run first.
 
-Output: data/nonlinearity_check_summary.txt, data/nonlinearity_check.png
+Output: data/nonlinearity_check_summary.txt, data/nonlinearity_check_forest.png
 """
 import os
 
@@ -26,106 +28,125 @@ import numpy as np
 import pandas as pd
 import statsmodels.formula.api as smf
 
+from fit_primary_analysis import (
+    random_effects_meta, make_forest_plot,
+    IN_PATH, MIN_SESSIONS_PER_RIDER, MIN_DAYS_FOR_RELIABLE_CLUSTERING,
+)
+
 ROOT = os.path.join(os.path.dirname(__file__), "..")
-IN_PATH = os.path.join(ROOT, "data", "pvt_aq_linked.csv")
 SUMMARY_OUT = os.path.join(ROOT, "data", "nonlinearity_check_summary.txt")
-PLOT_OUT = os.path.join(ROOT, "data", "nonlinearity_check.png")
+PER_RIDER_OUT = os.path.join(ROOT, "data", "nonlinearity_check_per_rider.csv")
+FOREST_OUT = os.path.join(ROOT, "data", "nonlinearity_check_forest.png")
 
 MODEL_COLS = [
     "response_speed_hz", "pm25_mean_sameday", "temp_mean_sameday",
     "humidity_mean_sameday", "shift_duration_min_sameday", "session_number",
     "hour_of_day", "username",
 ]
-LINEAR_FORMULA = (
-    "response_speed_hz ~ pm25_within + pm25_between + temp_mean_sameday "
+FORMULA = (
+    "response_speed_hz ~ pm25_within + I(pm25_within ** 2) + temp_mean_sameday "
     "+ humidity_mean_sameday + shift_duration_min_sameday + session_number "
     "+ hour_of_day"
 )
-QUARTILE_FORMULA = (
-    "response_speed_hz ~ C(pm25_quartile) + pm25_between + temp_mean_sameday "
-    "+ humidity_mean_sameday + shift_duration_min_sameday + session_number "
-    "+ hour_of_day"
-)
+QUAD_TERM = "I(pm25_within ** 2)"
 
 
-def build_model_frame(df):
+def build_frame(df):
     g = df.dropna(subset=MODEL_COLS).copy()
     g["pm25_between"] = g.groupby("username")["pm25_mean_sameday"].transform("mean")
     g["pm25_within"] = g["pm25_mean_sameday"] - g["pm25_between"]
-    # Per-rider quartiles of that rider's own exposure -- a within-subjects
-    # comparison, same logic as the linear pm25_within term, just binned.
-    g["pm25_quartile"] = g.groupby("username")["pm25_within"].transform(
-        lambda s: pd.qcut(s, 4, labels=["Q1", "Q2", "Q3", "Q4"], duplicates="drop")
-    )
     return g
+
+
+def fit_per_rider_quadratic(df):
+    """Same per-rider + day-clustered-SE approach as fit_primary_analysis,
+    but extracting the quadratic term's coefficient instead of the linear
+    PM2.5 term."""
+    rows = []
+    for username, g in df.groupby("username"):
+        n_days = g["test_date"].nunique()
+        if len(g) < MIN_SESSIONS_PER_RIDER:
+            rows.append({"username": username, "n": len(g), "n_days": n_days, "included": False,
+                         "reason": "too few complete sessions"})
+            continue
+        try:
+            fit = smf.ols(FORMULA, data=g).fit(
+                cov_type="cluster", cov_kwds={"groups": g["test_date"]}
+            )
+        except Exception as e:
+            rows.append({"username": username, "n": len(g), "n_days": n_days, "included": False,
+                         "reason": f"fit failed: {e}"})
+            continue
+        beta = fit.params.get(QUAD_TERM, np.nan)
+        se = fit.bse.get(QUAD_TERM, np.nan)
+        if not np.isfinite(beta) or not np.isfinite(se) or se <= 0:
+            rows.append({"username": username, "n": len(g), "n_days": n_days, "included": False,
+                         "reason": "non-finite coefficient/SE (likely collinear)"})
+            continue
+        rows.append({
+            "username": username, "n": len(g), "n_days": n_days, "included": True, "reason": "",
+            "beta_pm25": beta, "se_pm25": se,
+            "ci_low": beta - 1.96 * se, "ci_high": beta + 1.96 * se,
+            "r_squared": fit.rsquared,
+        })
+    return pd.DataFrame(rows)
 
 
 def main():
     df = pd.read_csv(IN_PATH)
-    g = build_model_frame(df)
-    g = g.dropna(subset=["pm25_quartile"])
+    g = build_frame(df)
+
+    per_rider = fit_per_rider_quadratic(g)
+    per_rider.to_csv(PER_RIDER_OUT, index=False)
+
+    included = per_rider[per_rider["included"]]
+    excluded = per_rider[~per_rider["included"]]
 
     lines = []
-    lines.append(f"Nonlinearity check: {len(g)} sessions, {g['username'].nunique()} riders")
-    lines.append("Per-rider quartiles of within-rider PM2.5 exposure (Q1=cleanest, Q4=dirtiest,")
-    lines.append("relative to that rider's own distribution), pooled model with (1 | rider).")
+    lines.append("Nonlinearity check: per-rider quadratic term, meta-analyzed (consistent")
+    lines.append("with the primary §4 per-rider methodology, not pooled).")
+    lines.append(f"Formula per rider: {FORMULA}")
+    lines.append(f"Quadratic term uses pm25_within (rider-mean-centered) to avoid")
+    lines.append(f"linear/quadratic collinearity.")
+    lines.append("")
+    lines.append(f"Per-rider models fit: {len(included)}/{len(per_rider)} riders included")
+    if len(excluded):
+        lines.append("Excluded:")
+        for _, r in excluded.iterrows():
+            lines.append(f"  {r['username']}: n={r['n']}, reason: {r['reason']}")
+
+    thin_clusters = included[included["n_days"] < MIN_DAYS_FOR_RELIABLE_CLUSTERING]
+    if len(thin_clusters):
+        lines.append(
+            f"Caveat: {len(thin_clusters)} rider(s) have <{MIN_DAYS_FOR_RELIABLE_CLUSTERING} distinct "
+            "days, cluster-robust SEs less reliable (flagged, not excluded):"
+        )
+        for _, r in thin_clusters.iterrows():
+            lines.append(f"  {r['username']}: n_days={r['n_days']}")
     lines.append("")
 
-    fit_linear = smf.mixedlm(LINEAR_FORMULA, data=g, groups=g["username"]).fit(reml=False)
-    fit_quart = smf.mixedlm(QUARTILE_FORMULA, data=g, groups=g["username"]).fit(reml=False)
-
-    lines.append(f"Linear model AIC    = {fit_linear.aic:.2f}")
-    lines.append(f"Quartile model AIC  = {fit_quart.aic:.2f}")
-    lines.append(f"(Lower AIC is a better fit; a much lower quartile-model AIC would suggest")
-    lines.append(f" real nonlinearity the linear term misses. Compared with REML=False/ML")
-    lines.append(f" fitting since AIC comparisons across differently-parameterized fixed")
-    lines.append(f" effects require ML, not REML.)")
-    lines.append("")
-
-    lines.append("Quartile coefficients (relative to Q1, the cleanest-air quartile):")
-    quartile_effects = {"Q1": 0.0}
-    quartile_ci = {"Q1": (0.0, 0.0)}
-    for q in ["Q2", "Q3", "Q4"]:
-        key = f"C(pm25_quartile)[T.{q}]"
-        beta = fit_quart.params.get(key, np.nan)
-        se = fit_quart.bse.get(key, np.nan)
-        quartile_effects[q] = beta
-        quartile_ci[q] = (beta - 1.96 * se, beta + 1.96 * se)
-        lines.append(f"  {q}: beta={beta:.6f}  SE={se:.6f}  95% CI=[{beta - 1.96*se:.6f}, {beta + 1.96*se:.6f}]")
-
-    vals = [quartile_effects[q] for q in ["Q1", "Q2", "Q3", "Q4"]]
-    is_monotonic = all(vals[i] >= vals[i + 1] for i in range(len(vals) - 1)) or \
-                   all(vals[i] <= vals[i + 1] for i in range(len(vals) - 1))
-    lines.append("")
-    lines.append(f"Monotonic Q1->Q4 trend: {is_monotonic} "
-                 f"({'consistent with a smooth dose-response' if is_monotonic else 'NOT monotonic -- possible threshold/non-monotonic effect'})")
-    lines.append(
-        "CAVEAT: like PLAN.md #5's Model A, this check pools all riders under one "
-        "common effect (here, one common quartile pattern) rather than letting each "
-        "rider have their own shape -- the same pooling that diluted #5's estimate "
-        "relative to the primary per-rider analysis. A null/non-monotonic result here "
-        "means 'no evidence of nonlinearity in the pooled/average sense', not a strong "
-        "claim that no individual rider has a nonlinear dose-response -- testing that "
-        "properly would need per-rider quartile fits, which aren't reliable at "
-        "~20-25 sessions per rider per quartile bin."
-    )
-
-    fig, ax = plt.subplots(figsize=(6, 4))
-    qs = ["Q1", "Q2", "Q3", "Q4"]
-    y = [quartile_effects[q] for q in qs]
-    yerr_lo = [quartile_effects[q] - quartile_ci[q][0] for q in qs]
-    yerr_hi = [quartile_ci[q][1] - quartile_effects[q] for q in qs]
-    ax.errorbar(qs, y, yerr=[yerr_lo, yerr_hi], fmt="o-", color="#3b6fa0",
-                ecolor="#8fa8bf", elinewidth=1.5, capsize=4, markersize=6)
-    ax.axhline(0, color="#999999", linewidth=1, linestyle="--")
-    ax.set_xlabel("Within-rider PM2.5 quartile (Q1=cleanest, Q4=dirtiest)")
-    ax.set_ylabel("Response speed effect vs. Q1 (Hz)")
-    ax.set_title("PM2.5 dose-response by quartile\n(pooled model, relative to each rider's own Q1)")
-    ax.spines[["top", "right"]].set_visible(False)
-    fig.tight_layout()
-    fig.savefig(PLOT_OUT, dpi=150)
-    plt.close(fig)
-    lines.append(f"\nPlot written to {PLOT_OUT}")
+    if len(included) < 2:
+        lines.append("Fewer than 2 riders with valid fits -- cannot run meta-analysis.")
+    else:
+        meta = random_effects_meta(included["beta_pm25"].to_numpy(), included["se_pm25"].to_numpy())
+        lines.append("Random-effects meta-analysis of the quadratic term (DerSimonian-Laird):")
+        lines.append(f"  k (riders)          = {meta['k']}")
+        lines.append(f"  pooled quad. beta    = {meta['mu_re']:.8f}")
+        lines.append(f"  SE                   = {meta['se_re']:.8f}")
+        lines.append(f"  95% CI               = [{meta['ci_low']:.8f}, {meta['ci_high']:.8f}]")
+        lines.append(f"  z                    = {meta['z']:.3f}")
+        lines.append(f"  I^2 (% het.)         = {meta['i2']:.1f}%")
+        lines.append("")
+        sig = meta["ci_low"] > 0 or meta["ci_high"] < 0
+        lines.append(
+            f"Interpretation: {'quadratic term is significant -- evidence of curvature/nonlinearity' if sig else 'CI includes zero -- no evidence of curvature; linear model remains a reasonable fit'}."
+        )
+        make_forest_plot(
+            per_rider, meta, out_path=FOREST_OUT,
+            xlabel="Quadratic PM2.5 term coefficient (I(pm25_within**2)) -- nonzero implies curvature",
+            title="Per-rider PM2.5 quadratic term\nwith random-effects pooled estimate",
+        )
+        lines.append(f"\nForest plot written to {FOREST_OUT}")
 
     summary = "\n".join(lines)
     with open(SUMMARY_OUT, "w") as f:

@@ -135,7 +135,9 @@ def random_effects_meta(beta, se):
     }
 
 
-def make_forest_plot(per_rider, meta, out_path=FOREST_OUT, exposure_label="same-day cumulative exposure"):
+def make_forest_plot(per_rider, meta, out_path=FOREST_OUT,
+                      xlabel="PM2.5 coefficient on response speed (Hz per µg/m³), same-day cumulative exposure",
+                      title="Per-rider PM2.5 effect on PVT response speed\nwith random-effects pooled estimate"):
     included = per_rider[per_rider["included"]].sort_values("beta_pm25")
     fig_height = 0.35 * len(included) + 2
     fig, ax = plt.subplots(figsize=(8, fig_height))
@@ -165,8 +167,8 @@ def make_forest_plot(per_rider, meta, out_path=FOREST_OUT, exposure_label="same-
     ax.set_yticklabels(yticklabels, fontsize=8)
     ax.set_ylim(pooled_y - 1, len(included))
 
-    ax.set_xlabel(f"PM2.5 coefficient on response speed (Hz per µg/m³), {exposure_label}")
-    ax.set_title("Per-rider PM2.5 effect on PVT response speed\nwith random-effects pooled estimate", fontsize=12)
+    ax.set_xlabel(xlabel, fontsize=9)
+    ax.set_title(title, fontsize=12)
     ax.spines[["top", "right"]].set_visible(False)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
