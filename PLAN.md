@@ -61,6 +61,15 @@ PM2.5_within_it = PM2.5_it − PM2.5_between_i
 - Random intercept per `rider`, nested with a `day:rider` random effect, since multiple PVT sessions can share a day's exposure (non-independent within-day).
 - `session_number` per rider controls for practice effects — PVT scores are known to improve with repeated administration, and riders have 90+ repeated sessions each.
 
+## Results so far (as of 2026-07-29)
+
+Pipeline (aq_sensor.csv split, linked dataset) and §4/§5 are implemented and run (`scripts/`). Linked dataset: 1922 PVT sessions, 22 riders, 91.3% same-day PM2.5 coverage.
+
+- **§4 primary (per-rider + random-effects meta-analysis)**: SEs clustered by `test_date` (riders take 2-3 PVT sessions/shift, so same-day sessions aren't independent — clustering matters: it moved the pooled result from non-significant to significant). Pooled β = **−0.00064 Hz/µg/m³** (95% CI [−0.00125, −0.00003], z=−2.05, **significant**), I²=44.8% (real cross-rider heterogeneity — most riders trend negative, a few, notably `Panatda_6018`, trend clearly positive).
+- **§5 secondary (pooled mixed model)**: common-slope model gives β = −0.00020 (not significant) — smaller and non-significant relative to §4. Attempted random-slope versions to test whether forcing a homogeneous slope explains the gap; both specifications were numerically unusable (one didn't converge, one converged to a degenerate fit with SE ~400x the coefficient). This non-convergence is itself informative: it's consistent with genuine slope heterogeneity across riders (Pesaran & Smith 1995 — a pooled/common-slope estimator isn't a consistent estimator of the average effect under heterogeneous slopes; the mean-group estimator §4 uses is). **Trust §4 as the headline result**; §5's common-slope model is a weaker, only directionally-consistent cross-check, not a contradiction.
+- **Dropped covariate**: `day_of_week`/`is_weekend` removed from both models — all 12 weekend PVT sessions in the raw data have no same-day AQ readings (sensors appear off on weekends), so after `dropna` the modeling frame has zero weekend rows and the covariate is structurally constant (was causing a singular design matrix in the mixed model).
+- **Known residual issue**: `shift_duration_min_sameday` and `hour_of_day` are highly correlated (r=0.988, since most riders start shifts around the same clock time) — the model can't cleanly separate "time since shift start" from "time of day" with this data. Doesn't implicate PM2.5 directly but makes those two coefficients individually untrustworthy.
+
 ## 6. Robustness / secondary checks
 
 - **Heterogeneity check**: `τ²`/`I²` from the §4 meta-analysis already quantifies how much the PM2.5 effect varies rider-to-rider — report it, and flag if it's large enough that a single pooled number is misleading.
@@ -68,8 +77,9 @@ PM2.5_within_it = PM2.5_it − PM2.5_between_i
 - **Exposure-window sensitivity**: report the primary cumulative same-day measure alongside the 1h/4h trailing-window alternatives — if performance tracks cumulative exposure rather than recent air, the cumulative measure should fit better/more stably than the short windows.
 - **Multiple comparisons**: 1/RT is the pre-registered primary outcome; median RT / lapses / error rate are secondary/exploratory, reported without inflating claims from them.
 
-## Next steps (not yet started)
+## Next steps
 
-1. Split `aq_sensor.csv` by `Node` for fast per-rider lookups (too large — ~5GB — to rescan per query).
-2. Build the linked dataset: join `pvt.csv` sessions to roster (`PVT user` + sensor + date range) and attach PM2.5/temp/humidity exposure summaries per window.
-3. Fit the per-rider regressions + random-effects meta-analysis (§4, primary), the pooled mixed model (§5, secondary), and the robustness checks (§6).
+1. ~~Split `aq_sensor.csv` by `Node` for fast per-rider lookups~~ — done (`scripts/split_aq_by_node.sh`).
+2. ~~Build the linked dataset~~ — done (`scripts/build_pvt_aq_dataset.py`).
+3. ~~Fit §4 (primary) and §5 (secondary)~~ — done (`scripts/fit_primary_analysis.py`, `scripts/fit_pooled_mixed_model.py`). See "Results so far" above.
+4. §6 robustness checks — remaining: nonlinearity (spline/quartile-binned PM2.5 per rider) and exposure-window sensitivity (1h/4h vs. same-day). Heterogeneity (I²) and multiple-comparisons handling are already addressed above.

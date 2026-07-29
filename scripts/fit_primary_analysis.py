@@ -38,12 +38,17 @@ FOREST_OUT = os.path.join(ROOT, "data", "primary_analysis_forest.png")
 MODEL_COLS = [
     "response_speed_hz", "pm25_mean_sameday", "temp_mean_sameday",
     "humidity_mean_sameday", "shift_duration_min_sameday", "session_number",
-    "hour_of_day", "day_of_week",
+    "hour_of_day",
 ]
+# day_of_week / is_weekend dropped: all 12 weekend PVT sessions in the raw
+# data have no same-day AQ readings (sensors appear to be off on
+# weekends), so after dropna the modeling frame has zero weekend rows --
+# the covariate is structurally constant here and was causing a singular
+# design matrix downstream (see fit_pooled_mixed_model.py).
 FORMULA = (
     "response_speed_hz ~ pm25_mean_sameday + temp_mean_sameday "
     "+ humidity_mean_sameday + shift_duration_min_sameday + session_number "
-    "+ hour_of_day + is_weekend"
+    "+ hour_of_day"
 )
 MIN_SESSIONS_PER_RIDER = 15
 # Below this many distinct days, cluster-robust SEs are unreliable
@@ -69,7 +74,6 @@ def fit_per_rider(df):
             rows.append({"username": username, "n": len(g), "n_days": n_days, "included": False,
                          "reason": "too few complete sessions"})
             continue
-        g = g.assign(is_weekend=g["day_of_week"].isin(["Saturday", "Sunday"]).astype(int))
         try:
             fit = smf.ols(FORMULA, data=g).fit(
                 cov_type="cluster", cov_kwds={"groups": g["test_date"]}

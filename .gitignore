@@ -6,3 +6,5 @@
 !/scripts/
 !/scripts/**
 !.gitignore
+
+/scripts/__pycache__/
