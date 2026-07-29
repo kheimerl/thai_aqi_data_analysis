@@ -9,6 +9,11 @@ Step 2: combine the per-rider PM2.5 coefficients via a DerSimonian-Laird
 random-effects meta-analysis, weighting each rider's estimate by its
 precision rather than averaging them naively.
 
+The core per-rider + meta-analysis logic (fit_per_rider, random_effects_meta)
+is reused by fit_window_sensitivity.py (PLAN.md #6) to re-run this same
+analysis against the 1h/4h trailing-window exposure variables instead of
+the primary same-day one.
+
 Requires scripts/build_pvt_aq_dataset.py to have been run first.
 
 Outputs:
@@ -35,28 +40,34 @@ PER_RIDER_OUT = os.path.join(ROOT, "data", "primary_analysis_per_rider.csv")
 SUMMARY_OUT = os.path.join(ROOT, "data", "primary_analysis_summary.txt")
 FOREST_OUT = os.path.join(ROOT, "data", "primary_analysis_forest.png")
 
-MODEL_COLS = [
-    "response_speed_hz", "pm25_mean_sameday", "temp_mean_sameday",
-    "humidity_mean_sameday", "shift_duration_min_sameday", "session_number",
-    "hour_of_day",
-]
-# day_of_week / is_weekend dropped: all 12 weekend PVT sessions in the raw
-# data have no same-day AQ readings (sensors appear to be off on
-# weekends), so after dropna the modeling frame has zero weekend rows --
-# the covariate is structurally constant here and was causing a singular
-# design matrix downstream (see fit_pooled_mixed_model.py).
-FORMULA = (
-    "response_speed_hz ~ pm25_mean_sameday + temp_mean_sameday "
-    "+ humidity_mean_sameday + shift_duration_min_sameday + session_number "
-    "+ hour_of_day"
-)
+EXPOSURE_COL = "pm25_mean_sameday"
+TEMP_COL = "temp_mean_sameday"
+HUMIDITY_COL = "humidity_mean_sameday"
+# shift_duration_min only exists for the sameday window (it's meaningless
+# for a fixed-length trailing window) -- reused as-is for the window
+# sensitivity checks, since "time on shift so far" is the same confound to
+# control for regardless of which exposure window is being tested.
+SHIFT_DURATION_COL = "shift_duration_min_sameday"
+
 MIN_SESSIONS_PER_RIDER = 15
 # Below this many distinct days, cluster-robust SEs are unreliable
 # (too few clusters for the asymptotics) -- flag, don't exclude.
 MIN_DAYS_FOR_RELIABLE_CLUSTERING = 20
 
 
-def fit_per_rider(df):
+def formula_for(exposure_col, temp_col, humidity_col):
+    # day_of_week / is_weekend dropped: all 12 weekend PVT sessions in the
+    # raw data have no same-day AQ readings (sensors appear to be off on
+    # weekends), so after dropna the modeling frame has zero weekend rows --
+    # the covariate is structurally constant here and was causing a
+    # singular design matrix downstream (see fit_pooled_mixed_model.py).
+    return (
+        f"response_speed_hz ~ {exposure_col} + {temp_col} + {humidity_col} "
+        f"+ {SHIFT_DURATION_COL} + session_number + hour_of_day"
+    )
+
+
+def fit_per_rider(df, exposure_col=EXPOSURE_COL, temp_col=TEMP_COL, humidity_col=HUMIDITY_COL):
     """Fit each rider's own OLS with standard errors clustered by test_date.
 
     Riders often take 2-3 PVT sessions per shift; same-day sessions share
@@ -66,24 +77,29 @@ def fit_per_rider(df):
     beta unchanged but widens SE for riders whose sessions cluster heavily
     within days, which the meta-analysis step will down-weight accordingly.
     """
+    formula = formula_for(exposure_col, temp_col, humidity_col)
+    model_cols = [
+        "response_speed_hz", exposure_col, temp_col, humidity_col,
+        SHIFT_DURATION_COL, "session_number", "hour_of_day",
+    ]
     rows = []
     for username, g in df.groupby("username"):
-        g = g.dropna(subset=MODEL_COLS)
+        g = g.dropna(subset=model_cols)
         n_days = g["test_date"].nunique()
         if len(g) < MIN_SESSIONS_PER_RIDER:
             rows.append({"username": username, "n": len(g), "n_days": n_days, "included": False,
                          "reason": "too few complete sessions"})
             continue
         try:
-            fit = smf.ols(FORMULA, data=g).fit(
+            fit = smf.ols(formula, data=g).fit(
                 cov_type="cluster", cov_kwds={"groups": g["test_date"]}
             )
         except Exception as e:  # rank-deficient / singular design
             rows.append({"username": username, "n": len(g), "n_days": n_days, "included": False,
                          "reason": f"fit failed: {e}"})
             continue
-        beta = fit.params.get("pm25_mean_sameday", np.nan)
-        se = fit.bse.get("pm25_mean_sameday", np.nan)
+        beta = fit.params.get(exposure_col, np.nan)
+        se = fit.bse.get(exposure_col, np.nan)
         if not np.isfinite(beta) or not np.isfinite(se) or se <= 0:
             rows.append({"username": username, "n": len(g), "n_days": n_days, "included": False,
                          "reason": "non-finite coefficient/SE (likely collinear)"})
@@ -119,7 +135,7 @@ def random_effects_meta(beta, se):
     }
 
 
-def make_forest_plot(per_rider, meta):
+def make_forest_plot(per_rider, meta, out_path=FOREST_OUT, exposure_label="same-day cumulative exposure"):
     included = per_rider[per_rider["included"]].sort_values("beta_pm25")
     fig_height = 0.35 * len(included) + 2
     fig, ax = plt.subplots(figsize=(8, fig_height))
@@ -149,11 +165,11 @@ def make_forest_plot(per_rider, meta):
     ax.set_yticklabels(yticklabels, fontsize=8)
     ax.set_ylim(pooled_y - 1, len(included))
 
-    ax.set_xlabel("PM2.5 coefficient on response speed (Hz per µg/m³), same-day cumulative exposure")
+    ax.set_xlabel(f"PM2.5 coefficient on response speed (Hz per µg/m³), {exposure_label}")
     ax.set_title("Per-rider PM2.5 effect on PVT response speed\nwith random-effects pooled estimate", fontsize=12)
     ax.spines[["top", "right"]].set_visible(False)
     fig.tight_layout()
-    fig.savefig(FOREST_OUT, dpi=150)
+    fig.savefig(out_path, dpi=150)
     plt.close(fig)
 
 
