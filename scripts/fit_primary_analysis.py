@@ -56,11 +56,17 @@ MIN_DAYS_FOR_RELIABLE_CLUSTERING = 20
 
 
 def formula_for(exposure_col, temp_col, humidity_col):
-    # day_of_week / is_weekend dropped: all 12 weekend PVT sessions in the
-    # raw data have no same-day AQ readings (sensors appear to be off on
-    # weekends), so after dropna the modeling frame has zero weekend rows --
-    # the covariate is structurally constant here and was causing a
-    # singular design matrix downstream (see fit_pooled_mixed_model.py).
+    """Build the per-rider OLS formula string for a given exposure/temp/
+    humidity column triple (lets fit_per_rider be reused for the 1h/4h
+    windows in fit_window_sensitivity.py, not just the primary sameday
+    columns).
+
+    day_of_week / is_weekend dropped: all 12 weekend PVT sessions in the
+    raw data have no same-day AQ readings (sensors appear to be off on
+    weekends), so after dropna the modeling frame has zero weekend rows --
+    the covariate is structurally constant here and was causing a
+    singular design matrix downstream (see fit_pooled_mixed_model.py).
+    """
     return (
         f"response_speed_hz ~ {exposure_col} + {temp_col} + {humidity_col} "
         f"+ {SHIFT_DURATION_COL} + session_number + hour_of_day"
@@ -76,6 +82,20 @@ def fit_per_rider(df, exposure_col=EXPOSURE_COL, temp_col=TEMP_COL, humidity_col
     understates the SEs. Clustering by day corrects for that -- it leaves
     beta unchanged but widens SE for riders whose sessions cluster heavily
     within days, which the meta-analysis step will down-weight accordingly.
+
+    Args:
+      df: linked PVT+AQ sessions (data/pvt_aq_linked.csv), one row per session.
+      exposure_col, temp_col, humidity_col: column names to use as the
+        PM2.5/temperature/humidity predictors -- swappable so the same
+        function serves the primary sameday analysis and the 1h/4h
+        window-sensitivity checks.
+
+    Returns a DataFrame, one row per rider, with columns: n (sessions),
+    n_days (distinct test dates), included (bool), reason (why excluded,
+    if applicable), beta_pm25, se_pm25, ci_low, ci_high, r_squared.
+    Riders below MIN_SESSIONS_PER_RIDER or with a singular/non-finite fit
+    are kept in the output with included=False rather than silently
+    dropped, so exclusions are auditable.
     """
     formula = formula_for(exposure_col, temp_col, humidity_col)
     model_cols = [
@@ -114,7 +134,20 @@ def fit_per_rider(df, exposure_col=EXPOSURE_COL, temp_col=TEMP_COL, humidity_col
 
 
 def random_effects_meta(beta, se):
-    """DerSimonian-Laird random-effects meta-analysis."""
+    """DerSimonian-Laird random-effects meta-analysis: combine k per-rider
+    (beta, se) estimates into one pooled effect, weighting each rider by
+    the inverse of their variance (precise estimates count more) rather
+    than averaging naively, and estimating tau^2 -- how much of the
+    across-rider spread in beta is real heterogeneity vs. sampling noise.
+
+    Args:
+      beta, se: 1D arrays of per-rider coefficient estimates and their
+        standard errors (from fit_per_rider's included rows).
+
+    Returns a dict: k (rider count), mu_re/se_re (pooled estimate + SE),
+    ci_low/ci_high, z, tau2 (heterogeneity variance), i2 (heterogeneity
+    as a %), q/q_df (Cochran's Q test statistic and its degrees of freedom).
+    """
     v = se ** 2
     w_fe = 1.0 / v
     mu_fe = np.sum(w_fe * beta) / np.sum(w_fe)
@@ -138,6 +171,13 @@ def random_effects_meta(beta, se):
 def make_forest_plot(per_rider, meta, out_path=FOREST_OUT,
                       xlabel="PM2.5 coefficient on response speed (Hz per µg/m³), same-day cumulative exposure",
                       title="Per-rider PM2.5 effect on PVT response speed\nwith random-effects pooled estimate"):
+    """Render a forest plot: one point+CI per included rider (sorted by
+    effect size), plus the pooled random-effects estimate as a diamond
+    below them. `xlabel`/`title` are parameterized so this same function
+    serves the primary analysis, the window-sensitivity checks, and the
+    nonlinearity check's quadratic-term plot with call-site-appropriate
+    labels (see fit_window_sensitivity.py, fit_nonlinearity_check.py).
+    Saves to `out_path`; does not return anything."""
     included = per_rider[per_rider["included"]].sort_values("beta_pm25")
     fig_height = 0.35 * len(included) + 2
     fig, ax = plt.subplots(figsize=(8, fig_height))
@@ -176,6 +216,10 @@ def make_forest_plot(per_rider, meta, out_path=FOREST_OUT,
 
 
 def main():
+    """Run the full primary analysis end to end: fit every rider
+    independently (fit_per_rider), meta-analyze the results
+    (random_effects_meta), and write the per-rider CSV, text summary, and
+    forest plot to data/."""
     df = pd.read_csv(IN_PATH)
 
     per_rider = fit_per_rider(df)

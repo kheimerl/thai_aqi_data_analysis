@@ -49,6 +49,13 @@ ASSUMED_SAMPLES_PER_MINUTE = 60
 
 
 def load_roster():
+    """Load the rider roster from the summary sheet of the tracking xlsx.
+
+    Returns a DataFrame with one row per (rider, sensor-assignment period):
+    PVT user, Node (Grab-<sensor no.>), Start date, End date. A rider can
+    appear more than once if they were reassigned to a different sensor
+    mid-study (see resolve_node).
+    """
     df = pd.read_excel(
         os.path.join(ROOT, "2025-2026 Rider-Sensor-Summary.xlsx"), sheet_name="summary"
     )
@@ -73,6 +80,22 @@ def resolve_node(username, test_date, roster):
 
 
 def load_pvt():
+    """Load pvt.csv, excluding staff/test accounts, and derive per-session
+    outcome/covariate columns:
+
+      response_speed_hz -- primary PVT outcome, mean(1000/RT_ms) per
+                            session (1/RT handles the right skew in raw
+                            reaction times; see PLAN.md #2).
+      median_rt_ms       -- secondary outcome.
+      error_rate         -- secondary outcome, 1 - percent_success/100.
+      session_number     -- that rider's 1-indexed test count over time,
+                            controls for practice effects (PLAN.md #4/#5).
+      hour_of_day, day_of_week, test_date -- derived from the session
+                            timestamp for time-of-day/day covariates and
+                            for joining against AQ exposure by calendar day.
+
+    Returns one row per PVT session.
+    """
     df = pd.read_csv(os.path.join(ROOT, "pvt.csv"))
     df["username"] = df["username"].astype(str).str.strip()
     df = df[~df["username"].isin(EXCLUDE_USERNAMES)].copy()
@@ -112,6 +135,10 @@ EMPTY_STATS = {
 
 
 def _slice_stats(arrs, lo, hi):
+    """Summarize a node's PM2.5/temp/humidity arrays over index range
+    [lo, hi) into the EMPTY_STATS-shaped dict (mean/median PM2.5, mean
+    temp/humidity, and the observation count used as a coverage check).
+    Returns all-NaN/zero-count stats if the range is empty."""
     if hi <= lo:
         return dict(EMPTY_STATS)
     pm25 = arrs["pm25"][lo:hi]
@@ -131,6 +158,9 @@ class NodeCache:
         self._cache = {}
 
     def get(self, node):
+        """Return {ts, pm25, humidity, temp} numpy arrays (sorted by
+        timestamp) for `node`, reading and caching data/aq_by_node/<node>.csv
+        on first access. Returns None if that node has no split file."""
         if node not in self._cache:
             path = os.path.join(AQ_BY_NODE_DIR, f"{node}.csv")
             if not os.path.exists(path):
@@ -147,6 +177,10 @@ class NodeCache:
         return self._cache[node]
 
     def trailing_window_stats(self, node, ts_end, window_s):
+        """Secondary/sensitivity exposure window (PLAN.md #3): stats over
+        the `window_s` seconds immediately preceding `ts_end` (a fixed
+        trailing window, e.g. 1h or 4h), regardless of calendar-day
+        boundaries."""
         arrs = self.get(node)
         if arrs is None:
             return dict(EMPTY_STATS)
@@ -183,6 +217,12 @@ class NodeCache:
 
 
 def main():
+    """Join every PVT session to its rider's sensor (via resolve_node) and
+    attach sameday/1h/4h exposure summaries, writing one row per session
+    to data/pvt_aq_linked.csv. Sessions whose rider has no sensor
+    assignment covering that date get all-NaN exposure columns (kept in
+    the output, not dropped, so per-analysis scripts can decide how to
+    handle missingness)."""
     roster = load_roster()
     pvt = load_pvt()
     cache = NodeCache()

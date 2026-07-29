@@ -25,6 +25,10 @@ NR == 1 { next }
   print > file
 }
 END {
+  # Explicit close() so every per-node file's buffer is flushed before
+  # this script exits (awk keeps all ~27 output handles open throughout
+  # the run -- fine at this node count, would need a different approach
+  # at much higher cardinality).
   for (n in seen) close(out_dir "/" n ".csv")
 }
 ' "$SRC"

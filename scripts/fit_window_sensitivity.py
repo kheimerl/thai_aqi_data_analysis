@@ -61,6 +61,11 @@ def parse_primary_summary():
 
 
 def main():
+    """For each window in WINDOWS (sameday reused from the already-run
+    primary analysis; 1h and 4h freshly fit here via fit_per_rider +
+    random_effects_meta), write a forest plot and append its pooled
+    estimate to a side-by-side comparison table in
+    data/window_sensitivity_summary.txt."""
     df = pd.read_csv(IN_PATH)
 
     lines = []

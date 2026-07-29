@@ -52,6 +52,10 @@ QUAD_TERM = "I(pm25_within ** 2)"
 
 
 def build_frame(df):
+    """Drop rows missing any model column and add pm25_within (rider-
+    mean-centered PM2.5) -- same Mundlak-style centering as
+    fit_pooled_mixed_model.py, used here purely to decorrelate the linear
+    and quadratic terms, not for a within/between split."""
     g = df.dropna(subset=MODEL_COLS).copy()
     g["pm25_between"] = g.groupby("username")["pm25_mean_sameday"].transform("mean")
     g["pm25_within"] = g["pm25_mean_sameday"] - g["pm25_between"]
@@ -59,9 +63,18 @@ def build_frame(df):
 
 
 def fit_per_rider_quadratic(df):
-    """Same per-rider + day-clustered-SE approach as fit_primary_analysis,
-    but extracting the quadratic term's coefficient instead of the linear
-    PM2.5 term."""
+    """Same per-rider + day-clustered-SE approach as
+    fit_primary_analysis.fit_per_rider, but extracting the quadratic
+    term's coefficient (QUAD_TERM) instead of the linear PM2.5 term --
+    kept as a separate function rather than a fit_per_rider parameter
+    since the formula shape (linear + quadratic) differs from the
+    reusable single-exposure-column case that function was built for.
+
+    Returns the same per-rider DataFrame shape as fit_per_rider (n,
+    n_days, included, reason, beta_pm25, se_pm25, ci_low, ci_high,
+    r_squared), just with beta_pm25/se_pm25 now referring to the
+    quadratic term.
+    """
     rows = []
     for username, g in df.groupby("username"):
         n_days = g["test_date"].nunique()
@@ -93,6 +106,9 @@ def fit_per_rider_quadratic(df):
 
 
 def main():
+    """Fit the per-rider quadratic term, meta-analyze it, and write the
+    per-rider CSV, text summary (with a plain-language significance
+    interpretation), and forest plot to data/."""
     df = pd.read_csv(IN_PATH)
     g = build_frame(df)
 

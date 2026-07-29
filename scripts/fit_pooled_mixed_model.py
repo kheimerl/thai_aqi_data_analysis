@@ -46,6 +46,16 @@ FORMULA = (
 
 
 def build_model_frame(df):
+    """Prepare the pooled modeling frame: drop rows missing any model
+    column, then compute the Mundlak decomposition --
+      pm25_between = each rider's own mean sameday PM2.5 (a fixed trait
+                      of that rider, absorbs between-rider confounds)
+      pm25_within  = that session's deviation from the rider's own mean
+                      (the within-subject comparison, PLAN.md #5's
+                      headline estimand)
+    plus a rider_day id (used only diagnostically here; the nested
+    rider_day random effect built from it was found to over-parameterize
+    the model, see module docstring)."""
     g = df.dropna(subset=MODEL_COLS).copy()
     g["pm25_between"] = g.groupby("username")["pm25_mean_sameday"].transform("mean")
     g["pm25_within"] = g["pm25_mean_sameday"] - g["pm25_between"]
@@ -54,6 +64,11 @@ def build_model_frame(df):
 
 
 def parse_primary_pooled_beta():
+    """Scrape the pooled beta_pm25 value out of
+    data/primary_analysis_summary.txt (fit_primary_analysis.py's output)
+    so this script's summary can report the primary-vs-secondary
+    comparison without recomputing the primary analysis. Returns None if
+    that file doesn't exist yet or the line isn't found."""
     if not os.path.exists(PRIMARY_SUMMARY):
         return None
     for line in open(PRIMARY_SUMMARY):
@@ -63,6 +78,21 @@ def parse_primary_pooled_beta():
 
 
 def main():
+    """Fit two pooled mixed models and compare both against the primary
+    per-rider result:
+
+      Model A: pm25_within with one common slope across all riders, plus
+        a random intercept per rider. This is the PLAN.md #5 headline
+        secondary estimate.
+      Model B: an exploratory attempt to let pm25_within's slope vary by
+        rider (random slope), to test whether Model A's homogeneous-slope
+        assumption explains its divergence from the primary result. Kept
+        in the output for transparency even though it turned out to be
+        numerically unreliable (see the CAVEAT written into the summary).
+
+    Writes both models' full statsmodels summaries plus the comparison
+    discussion to data/pooled_mixed_model_summary.txt.
+    """
     df = pd.read_csv(IN_PATH)
     g = build_model_frame(df)
 
