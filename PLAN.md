@@ -23,9 +23,27 @@ Scope: `pvt.csv` + `aq_sensor.csv` only. `peakflow.csv` is set aside for now as 
 - **Cumulative exposure ≠ duration**: a same-day mean is less confounded with shift length than integrated dose is, but both need shift duration / time-on-task controlled separately in the model regardless — otherwise a "cumulative exposure" effect can't be distinguished from a "long shift → fatigue" effect.
 - Co-model **temperature and humidity** from the same sensor — plausible cognitive-stressor confounders correlated with PM2.5 (Bangkok/Chiang Mai heat).
 
-## 4. Statistical model — within/between decomposition (the crux)
+## 4. Statistical model — per-rider regression, meta-analytically combined (primary)
 
-A within-subjects design needs the within-subject effect isolated from between-subject confounds (e.g. a rider who happens to work a dirtier route shouldn't be conflated with a rider having a dirtier day). Use Mundlak / group-mean centering:
+The study design deliberately spans both the haze and clear-air seasons, so each rider has substantial within-person PM2.5 variance — the usual power objection to fitting riders independently (too little spread in one person's own exposure to estimate their own slope) mostly doesn't apply here. So the primary analysis fits every rider's own model separately, with no between-rider term at all, then combines the per-rider estimates statistically rather than pooling raw sessions into one regression.
+
+**Step 1 — per rider `i`, fit independently on only that rider's sessions:**
+```
+1/RT_td ~ PM2.5_td + temperature_td + humidity_td + shift_duration_td
+          + session_number_t (practice effect) + time_of_day + day_of_week
+```
+Extract `β_PM2.5,i` and its standard error `SE_i`.
+
+**Step 2 — combine the 23 `(β_i, SE_i)` pairs via random-effects meta-analysis** (DerSimonian-Laird or REML), not a plain average — this weights each rider's estimate by its precision (`1/SE_i²`) and reports:
+- a pooled effect estimate — the headline number for this analysis,
+- `τ²` / `I²` — how much the effect itself varies across riders, which is scientifically interesting on its own (are some riders more PM2.5-sensitive than others — by age, baseline health, route?),
+- a forest plot of the 23 rider-level slopes as the primary visualization.
+
+**Why this is primary**: it structurally cannot suffer from the between-subject confound discussed earlier — no step ever borrows information across riders to estimate the effect itself, since each rider's slope comes only from their own data — and the season-spanning design gives each rider enough PM2.5 spread for that individual estimate to be meaningful.
+
+## 5. Statistical model — pooled mixed model (secondary cross-check)
+
+Keep the previously-discussed pooled model as a secondary comparison, not the headline result. Use Mundlak / group-mean centering to isolate the within-subject effect from between-rider confounds:
 
 ```
 PM2.5_it        = time-weighted mean PM2.5, shift start -> test time (cumulative, same day)
@@ -39,19 +57,19 @@ PM2.5_within_it = PM2.5_it − PM2.5_between_i
            + (1 | rider_i) + (1 | day_d:rider_i)
 ```
 
-- **`PM2.5_within` is the headline estimand** — the true within-subject dose-response effect, cleanly separated from between-rider confounds via `PM2.5_between`.
+- `PM2.5_within`'s coefficient should be compared against the primary meta-analytic pooled estimate from §4 — agreement corroborates both; a meaningful disagreement is worth chasing down (e.g. something the mixed model's shared covariate estimation is picking up that fully independent per-rider models can't, or vice versa).
 - Random intercept per `rider`, nested with a `day:rider` random effect, since multiple PVT sessions can share a day's exposure (non-independent within-day).
 - `session_number` per rider controls for practice effects — PVT scores are known to improve with repeated administration, and riders have 90+ repeated sessions each.
 
-## 5. Robustness / secondary checks
+## 6. Robustness / secondary checks
 
-- **Two-step meta-analytic check**: fit a per-rider slope of outcome on PM2.5, then test whether the mean slope across riders differs from zero. Simple, interpretable cross-check against the LMM; good basis for a spaghetti/forest plot.
-- **Nonlinearity**: PM2.5-cognition effects may not be linear (threshold/saturation plausible) — fit a spline or quartile-binned version as a robustness check against the linear primary model.
-- **Exposure-window sensitivity**: report the within-subject coefficient for the primary cumulative same-day measure alongside the 1h/4h trailing-window alternatives — if performance tracks cumulative exposure rather than recent air, the cumulative measure should fit better/more stably than the short windows.
+- **Heterogeneity check**: `τ²`/`I²` from the §4 meta-analysis already quantifies how much the PM2.5 effect varies rider-to-rider — report it, and flag if it's large enough that a single pooled number is misleading.
+- **Nonlinearity**: PM2.5-cognition effects may not be linear (threshold/saturation plausible) — fit a spline or quartile-binned version per rider as a robustness check against the linear primary model.
+- **Exposure-window sensitivity**: report the primary cumulative same-day measure alongside the 1h/4h trailing-window alternatives — if performance tracks cumulative exposure rather than recent air, the cumulative measure should fit better/more stably than the short windows.
 - **Multiple comparisons**: 1/RT is the pre-registered primary outcome; median RT / lapses / error rate are secondary/exploratory, reported without inflating claims from them.
 
 ## Next steps (not yet started)
 
 1. Split `aq_sensor.csv` by `Node` for fast per-rider lookups (too large — ~5GB — to rescan per query).
 2. Build the linked dataset: join `pvt.csv` sessions to roster (`PVT user` + sensor + date range) and attach PM2.5/temp/humidity exposure summaries per window.
-3. Fit the LMM and robustness checks above.
+3. Fit the per-rider regressions + random-effects meta-analysis (§4, primary), the pooled mixed model (§5, secondary), and the robustness checks (§6).
