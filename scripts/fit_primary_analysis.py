@@ -133,20 +133,20 @@ def fit_per_rider(df, exposure_col=EXPOSURE_COL, temp_col=TEMP_COL, humidity_col
     return pd.DataFrame(rows)
 
 
-def random_effects_meta(beta, se):
-    """DerSimonian-Laird random-effects meta-analysis: combine k per-rider
-    (beta, se) estimates into one pooled effect, weighting each rider by
-    the inverse of their variance (precise estimates count more) rather
-    than averaging naively, and estimating tau^2 -- how much of the
-    across-rider spread in beta is real heterogeneity vs. sampling noise.
+def dl_tau2(beta, se):
+    """DerSimonian-Laird method-of-moments estimator for tau^2 (the
+    between-rider heterogeneity variance): a closed-form, non-iterative
+    estimate derived from how far Cochran's Q exceeds its expected value
+    under homogeneity. Known to be biased downward for small k (we have
+    k~22 riders) relative to iterative alternatives -- see pm_tau2/reml_tau2
+    in fit_tau2_estimator_check.py for a robustness comparison.
 
     Args:
-      beta, se: 1D arrays of per-rider coefficient estimates and their
-        standard errors (from fit_per_rider's included rows).
+      beta, se: 1D arrays of per-rider coefficient estimates and their SEs.
 
-    Returns a dict: k (rider count), mu_re/se_re (pooled estimate + SE),
-    ci_low/ci_high, z, tau2 (heterogeneity variance), i2 (heterogeneity
-    as a %), q/q_df (Cochran's Q test statistic and its degrees of freedom).
+    Returns (tau2, q, q_df): the estimate plus the Q statistic and its
+    degrees of freedom (k-1), reused by random_effects_meta for I^2/Q
+    reporting.
     """
     v = se ** 2
     w_fe = 1.0 / v
@@ -156,16 +156,51 @@ def random_effects_meta(beta, se):
     df = k - 1
     c = np.sum(w_fe) - np.sum(w_fe ** 2) / np.sum(w_fe)
     tau2 = max(0.0, (q - df) / c) if c > 0 else 0.0
-    i2 = max(0.0, (q - df) / q) * 100 if q > 0 else 0.0
+    return tau2, q, df
 
+
+def pool_given_tau2(beta, se, tau2):
+    """Inverse-variance-weight k per-rider (beta, se) estimates into one
+    pooled effect at a fixed tau^2 (precise estimates count more; a rider's
+    weight also shrinks as tau^2 grows, since more of the total variance is
+    attributed to real cross-rider heterogeneity rather than that rider's
+    own sampling noise). This weighting step is identical across
+    random-effects methods -- DL, Paule-Mandel, REML -- which differ only
+    in how tau^2 itself is estimated (see dl_tau2 above and
+    fit_tau2_estimator_check.py).
+
+    Returns a dict: k, mu_re/se_re (pooled estimate + SE), ci_low/ci_high, z, tau2.
+    """
+    v = se ** 2
     w_re = 1.0 / (v + tau2)
     mu_re = np.sum(w_re * beta) / np.sum(w_re)
     se_re = np.sqrt(1.0 / np.sum(w_re))
     return {
-        "k": k, "mu_re": mu_re, "se_re": se_re,
+        "k": len(beta), "mu_re": mu_re, "se_re": se_re,
         "ci_low": mu_re - 1.96 * se_re, "ci_high": mu_re + 1.96 * se_re,
-        "z": mu_re / se_re, "tau2": tau2, "i2": i2, "q": q, "q_df": df,
+        "z": mu_re / se_re, "tau2": tau2,
     }
+
+
+def random_effects_meta(beta, se):
+    """DerSimonian-Laird random-effects meta-analysis: combine k per-rider
+    (beta, se) estimates into one pooled effect via dl_tau2 + pool_given_tau2,
+    and additionally report I^2 -- how much of the across-rider spread in
+    beta is real heterogeneity vs. sampling noise.
+
+    Args:
+      beta, se: 1D arrays of per-rider coefficient estimates and their
+        standard errors (from fit_per_rider's included rows).
+
+    Returns a dict: k (rider count), mu_re/se_re (pooled estimate + SE),
+    ci_low/ci_high, z, tau2 (heterogeneity variance), i2 (heterogeneity
+    as a %), q/q_df (Cochran's Q test statistic and its degrees of freedom).
+    """
+    tau2, q, df = dl_tau2(beta, se)
+    i2 = max(0.0, (q - df) / q) * 100 if q > 0 else 0.0
+    result = pool_given_tau2(beta, se, tau2)
+    result.update({"i2": i2, "q": q, "q_df": df})
+    return result
 
 
 def make_forest_plot(per_rider, meta, out_path=FOREST_OUT,
