@@ -2,6 +2,8 @@
 
 Scope: `pvt.csv` + `aq_sensor.csv` only. `peakflow.csv` is set aside for now as a separate respiratory (not cognitive) study, using the same framework later.
 
+> **Status (2026-09-28): the PM2.5 results in this file are superseded.** `build_pvt_aq_dataset.py` read the Bangkok-local PVT timestamps as UTC and built day boundaries in the host's Pacific zone. Every exposure window therefore sat 3–7h after the test (46% of sessions entirely after it). Every PM2.5/temperature/humidity number under "Results so far" and §6 came from those windows. With timing fixed and nothing else changed, the §4 plan of record gives β = −2.0 × 10⁻⁴ Hz per µg/m³ (95% CI −4.8 to +0.9, p = 0.18). Post-test placebo air predicts PVT about as well as pre-test air, and no confound-robust design shows an effect. See `REVIEW_2026-09-28.md`, the spec written before any corrected fit (`REANALYSIS_SPEC_2026-09-28.md`) and `scripts/review_2026_09/`. The plan text below is kept as the plan of record. Nothing here was preregistered.
+
 ## 1. Cohort & data-quality findings
 
 - 23 riders (from `2025-2026 Rider-Sensor-Summary.xlsx`, `summary` sheet), after excluding `Preechai`, `adisorn`, `Patte` (confirmed research staff, not study riders) and trivial test entries (`Nussara`, `Rach`, `Rac`, `test`).
@@ -12,7 +14,7 @@ Scope: `pvt.csv` + `aq_sensor.csv` only. `peakflow.csv` is set aside for now as 
 
 `stimulation_times` shows ~300s test duration and ~90–100 trials — an abbreviated PVT-B-style protocol, not the standard 10-minute PVT. Validate any lapse threshold against literature for this abbreviated form before using it (the classic 500ms cutoff may not transfer as-is).
 
-- **Primary (pre-registered)**: response speed = 1/RT per session — handles the right skew visible in raw response times, standard in PVT literature.
+- **Primary (fixed in this plan before any fitting; not preregistered)**: response speed = 1/RT per session — handles the right skew visible in raw response times, standard in PVT literature.
 - **Secondary**: median RT, lapse count (threshold TBD), error rate (`1 - percent_success`).
 
 ## 3. Exposure metric
@@ -61,7 +63,9 @@ PM2.5_within_it = PM2.5_it − PM2.5_between_i
 - Random intercept per `rider`, nested with a `day:rider` random effect, since multiple PVT sessions can share a day's exposure (non-independent within-day).
 - `session_number` per rider controls for practice effects — PVT scores are known to improve with repeated administration, and riders have 90+ repeated sessions each.
 
-## Results so far (as of 2026-07-29)
+## Results so far (as of 2026-07-29) — SUPERSEDED, see Status at top
+
+Every PM2.5/temperature/humidity result in this section was computed on exposure windows misaligned by the timezone bug. The text is kept for the record. Its outputs are in `data/superseded_buggy_tz/`.
 
 Pipeline (aq_sensor.csv split, linked dataset) and §4/§5 are implemented and run (`scripts/`). Linked dataset: 1922 PVT sessions, 22 riders, 91.3% same-day PM2.5 coverage.
 
@@ -86,7 +90,7 @@ Pipeline (aq_sensor.csv split, linked dataset) and §4/§5 are implemented and r
 - **Heterogeneity check**: `τ²`/`I²` from the §4 meta-analysis already quantifies how much the PM2.5 effect varies rider-to-rider — report it, and flag if it's large enough that a single pooled number is misleading. Done: I²=44.8%, real heterogeneity, see above.
 - **Nonlinearity**: PM2.5-cognition effects may not be linear (threshold/saturation plausible) — fit a spline or quartile-binned version per rider as a robustness check against the linear primary model. Done at the pooled level (per-rider was infeasible, too few sessions per quartile bin) — see above.
 - **Exposure-window sensitivity**: report the primary cumulative same-day measure alongside the 1h/4h trailing-window alternatives — if performance tracks cumulative exposure rather than recent air, the cumulative measure should fit better/more stably than the short windows. Done — see above.
-- **Multiple comparisons**: 1/RT is the pre-registered primary outcome; median RT / lapses / error rate are secondary/exploratory, reported without inflating claims from them. Not yet implemented.
+- **Multiple comparisons**: 1/RT is the plan-of-record primary outcome (not preregistered); median RT / lapses / error rate are secondary/exploratory, reported without inflating claims from them. Not yet implemented.
 - **Learning-effect check** (added after the original §6 list, per 2026-07-29 discussion): drop each rider's first week to test whether the linear `session_number` control adequately captures front-loaded practice effects. Done — see above.
 - **Seasonal-confound check** (added after the original §6 list, per 2026-07-29 discussion): test whether `session_number` is a proxy for PM2.5's own seasonal trend rather than a clean practice-effect control. Done — see above.
 - **Precision-sensitivity check** (added after the original §6 list, per 2026-07-29 discussion): test whether positive-direction riders reflect a real subgroup or an estimation-precision artifact. Done — see above.
