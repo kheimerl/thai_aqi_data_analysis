@@ -6,8 +6,16 @@ for (practice/session number, time of day, day of week, rider identity,
 shift duration).
 
 Primary exposure window (PLAN.md #3): cumulative same-day, from that
-rider's first AQ reading that calendar day (shift start) to the test
-timestamp. Secondary/sensitivity windows: 1h and 4h trailing.
+rider's first AQ reading on the test's study day to the test timestamp.
+Sensors log 24h on study days, so in practice this is midnight -> test,
+not shift start -> test. Secondary/sensitivity windows: 1h and 4h trailing.
+
+Timing: PVT timestamps are naive Asia/Bangkok wall-clock times; AQ
+`Timestamp` is true Unix time. All conversions go through LOCAL_TZ
+explicitly. Before 2026-09-28 this script read PVT times as UTC and built
+day boundaries in the host's zone (America/Los_Angeles), which put every
+exposure window 3-7h after the test -- outputs from before that fix are
+invalid (see REVIEW_2026-09-28.md).
 
 Requires scripts/split_aq_by_node.sh to have been run first (writes
 data/aq_by_node/<node>.csv).
@@ -15,7 +23,6 @@ data/aq_by_node/<node>.csv).
 Output: data/pvt_aq_linked.csv
 """
 import ast
-import datetime as dt
 import os
 import warnings
 
@@ -31,6 +38,15 @@ warnings.filterwarnings("ignore", message="All-NaN slice encountered")
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 AQ_BY_NODE_DIR = os.path.join(ROOT, "data", "aq_by_node")
 OUT_PATH = os.path.join(ROOT, "data", "pvt_aq_linked.csv")
+
+# PVT/peak-flow timestamps are naive wall-clock times in this zone (verified
+# 2026-09-28: riders' GPS movement dips around test times only under this
+# reading). Thailand has no DST, so this is UTC+7 year-round.
+LOCAL_TZ = "Asia/Bangkok"
+# Tests before this local hour are late-shift tests just after midnight and
+# belong to the previous study day; the next calendar day's AQ export holds
+# only a single 00:00 reading.
+POST_MIDNIGHT_CUTOFF_H = 4
 
 # Research-staff / test accounts identified in pvt.csv that are not real
 # study riders (confirmed 2026-07-29) -- exclude from the cohort.
@@ -90,10 +106,17 @@ def load_pvt():
       error_rate         -- secondary outcome, 1 - percent_success/100.
       session_number     -- that rider's 1-indexed test count over time,
                             controls for practice effects (PLAN.md #4/#5).
-      hour_of_day, day_of_week, test_date -- derived from the session
-                            timestamp for time-of-day/day covariates and
-                            for joining against AQ exposure by calendar day.
+      test_date          -- the session's study day: its Bangkok calendar
+                            date, except that tests before
+                            POST_MIDNIGHT_CUTOFF_H belong to the previous
+                            day. Used for AQ joins and day clustering.
+      hour_of_day        -- hours since midnight of test_date (Bangkok);
+                            exceeds 24 for post-midnight tests.
+      day_of_week        -- weekday of test_date.
+      timestamp_unix     -- true Unix time of the test (timestamp read as
+                            LOCAL_TZ wall-clock, not UTC).
 
+    `timestamp` itself stays the naive Bangkok wall-clock value from pvt.csv.
     Returns one row per PVT session.
     """
     df = pd.read_csv(os.path.join(ROOT, "pvt.csv"))
@@ -122,9 +145,12 @@ def load_pvt():
 
     df = df.sort_values(["username", "timestamp"])
     df["session_number"] = df.groupby("username").cumcount() + 1
-    df["hour_of_day"] = df["timestamp"].dt.hour + df["timestamp"].dt.minute / 60.0
-    df["day_of_week"] = df["timestamp"].dt.day_name()
-    df["test_date"] = df["timestamp"].dt.date
+    local = df["timestamp"].dt.tz_localize(LOCAL_TZ)
+    df["timestamp_unix"] = (local - pd.Timestamp("1970-01-01", tz="UTC")).dt.total_seconds()
+    df["test_date"] = (local - pd.Timedelta(hours=POST_MIDNIGHT_CUTOFF_H)).dt.date
+    study_midnight = pd.to_datetime(df["test_date"]).dt.tz_localize(LOCAL_TZ)
+    df["hour_of_day"] = (local - study_midnight).dt.total_seconds() / 3600.0
+    df["day_of_week"] = pd.to_datetime(df["test_date"]).dt.day_name()
     return df
 
 
@@ -191,23 +217,24 @@ class NodeCache:
 
     def sameday_stats(self, node, ts_end, test_date):
         """Primary exposure window: cumulative from that rider's first AQ
-        reading on the test's calendar day (shift start) to the test time.
+        reading at/after Bangkok midnight of the study day (`test_date`)
+        to the test time. Not capped at the day's end, so a post-midnight
+        test's window spans its whole study day.
 
-        Adds shift_duration_min (calendar-elapsed minutes since shift
-        start -- the confound-control covariate) and pm25_dose_ugmin (an
-        integrated-dose proxy: summed PM2.5 readings / assumed samples
-        per minute, i.e. concentration x time, distinct from the plain
-        mean concentration in pm25_mean).
+        Adds shift_duration_min (elapsed minutes since the window's first
+        reading; sensors log 24h, so this is ~minutes since midnight, not
+        time on shift) and pm25_dose_ugmin (an integrated-dose proxy:
+        summed PM2.5 readings / assumed samples per minute, i.e.
+        concentration x time, distinct from the plain mean in pm25_mean).
         """
         arrs = self.get(node)
         empty = dict(EMPTY_STATS, shift_duration_min=np.nan, pm25_dose_ugmin=np.nan)
         if arrs is None:
             return empty
-        day_start = dt.datetime.combine(test_date, dt.time.min).timestamp()
-        day_end = dt.datetime.combine(test_date, dt.time.max).timestamp()
+        day_start = pd.Timestamp(test_date).tz_localize(LOCAL_TZ).timestamp()
         ts = arrs["ts"]
         lo = np.searchsorted(ts, day_start, side="left")
-        hi = np.searchsorted(ts, min(day_end, ts_end), side="right")
+        hi = np.searchsorted(ts, ts_end, side="right")
         if hi <= lo:
             return empty
         stats = _slice_stats(arrs, lo, hi)
@@ -232,7 +259,6 @@ def main():
         node = resolve_node(row.username, row.test_date, roster)
         rec = row._asdict()
         rec["node"] = node
-        rec["timestamp_unix"] = row.timestamp.timestamp()
 
         if node is not None:
             sameday = cache.sameday_stats(node, rec["timestamp_unix"], row.test_date)
