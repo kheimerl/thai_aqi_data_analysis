@@ -8,3 +8,6 @@
 !.gitignore
 
 __pycache__/
+
+# Local-only Claude Code notes
+/CLAUDE.local.md
