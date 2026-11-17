@@ -28,7 +28,7 @@ To join AQ readings, PVT results, and peak-flow results for a given rider, go th
 ### `aq_sensor.csv` (~5.1 GB) / `aq_sensor_csv.zip` (~800 MB, same content zipped)
 Per-second air-quality telemetry from the `Grab-XXXX` sensor nodes. Columns:
 `Timestamp` (true Unix seconds), `Node` (`Grab-XXXX`), `Datetime(UTC+7)` (Bangkok wall-clock), `GPS_Lat`, `GPS_Lon`, `GPS_Alt` (frequently blank), `Relative humidity`, `PM2.5`, `Temperature`.
-- The export covers only the ~35 study days (all weekdays), each a full 00:00–24:00 at ~1 Hz, plus a single 00:00 reading the next day. Sensors log overnight at home, so "first reading of the day" is midnight, not shift start.
+- The export covers only the ~35 study days, each a full 00:00–24:00 at ~1 Hz, plus a single 00:00 reading the next day. Study days were assigned at random by the study team (more days a week early on, later 2–3 a week with the weekdays varied); riders did not choose them. The sensor is mounted on the rider's helmet, not the bike; on longer stops some riders took it inside and some left it outside (not recorded). Sensors log overnight at home, so "first reading of the day" is midnight, not shift start.
 - Nodes 6006–6010 and 6033 are not in the roster.
 - Too large to load naively — read it in chunks or filter by `Node` first; `split_aq_by_node.sh` writes `data/aq_by_node/<node>.csv`. The `.zip` is a redundant copy — don't process both.
 

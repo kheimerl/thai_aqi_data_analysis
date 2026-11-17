@@ -91,7 +91,9 @@ D = D.sort_values(["pid", "ts"]).reset_index(drop=True)
 for c in ["P8_moving", "test_before_shift", "any_exclusion", "late_starter_handover"]:
     D[c] = tobool(D[c])
 # outcomes (rider means over the primary sample)
-D["Y1"] = 100 * (D.y1_speed_rtgt0 / D.groupby("pid").y1_speed_rtgt0.transform("mean") - 1)
+# Y1 primary = RT >= 100 ms (spec change 2026-11-11, S7 S3-1 option (a)); Y1g = v3-comparable RT > 0 version (sensitivity)
+D["Y1"] = 100 * (D.y1_speed_rt100 / D.groupby("pid").y1_speed_rt100.transform("mean") - 1)
+D["Y1g"] = 100 * (D.y1_speed_rtgt0 / D.groupby("pid").y1_speed_rtgt0.transform("mean") - 1)
 D["Y2"] = D.y2_lapse_pct_2xmed
 D["Y3"] = 100 * (D.y3_slowest10_speed / D.groupby("pid").y3_slowest10_speed.transform("mean") - 1)
 # time term T and covariates
@@ -488,7 +490,7 @@ P(f"- (d) LOO F3a p_HKSJ range {LOO.F3a_p.min():.3f}–{LOO.F3a_p.max():.3f}; T1
 # ===================== B Bangkok pilot =====================
 P("\n## B Bangkok demographic pilot (n = 10; validity and description only)")
 dem = pd.read_csv(os.path.join(ROOT, "demographics", "bkk_demographics.csv"))
-rk = D.groupby("pid").agg(speed=("y1_speed_rtgt0", "mean"), medrt=("med_rt", "median")).reset_index().merge(dem[["pid", "sex", "age_2026"]], on="pid")
+rk = D.groupby("pid").agg(speed=("y1_speed_rt100", "mean"), medrt=("med_rt", "median")).reset_index().merge(dem[["pid", "sex", "age_2026"]], on="pid")
 rng = np.random.default_rng(RNG_SEED)
 def spearman(x, y):
     rx = pd.Series(x).rank().to_numpy(); ry = pd.Series(y).rank().to_numpy(); return np.corrcoef(rx, ry)[0, 1]
@@ -530,6 +532,29 @@ for mid, f, nm in [("F1_Y1", "pm", "B3 PM(z) slope"), ("F2a", "hos", "B4 hours-o
         res_, k = metareg(prb, f, covs); NMODELS[0] += 1
         P(f"- {nm} on {'+'.join(covs)} (k {k}): " + "; ".join(f"{c} {e[0]:+.3f} [{e[1]:+.3f}, {e[2]:+.3f}] p {e[3]:.3f}" for c, e in zip(covs if len(covs) > 1 else covs, res_)))
         BMR[(nm, "+".join(covs))] = res_
+
+# ===================== Y1 trial-filter sensitivity (rtgt0, v3-comparable; added 2026-11-11) =====================
+P("\n## Y1 sensitivity: RT > 0 version (y1_speed_rtgt0, comparable with the v3 pipeline)")
+r = run("G_F1_Y1", D, "Y1g", [("pm", E, "z")] + B, ["pm"])["pm"]; P(f"- rtgt0 F1-Y1: {fmt(r)}")
+P(f"- rtgt0 bound: +1 SD ≥ {r['lo_hk']:+.2f}% (≈ {ms(r['lo_hk']):+.1f} ms); +2 SD ≥ {2*r['lo_hk']:+.2f}%")
+pr = PER["G_F1_Y1"]; p90 = pool(pr.b_pm / pr.sd_y, pr.se_pm / pr.sd_y, q=0.95); NMODELS[0] += 1
+P(f"- rtgt0 EQ Y1: {p90['mu']:+.3f} SD, 90% CI [{p90['lo_hk']:+.3f}, {p90['hi_hk']:+.3f}] → {'EQUIVALENT' if p90['lo_hk'] > -0.2 and p90['hi_hk'] < 0.2 else 'not shown equivalent'}")
+r = run("G_F2a", D, "Y1g", [("hos", "hos", "raw")] + T, ["hos"])["hos"]; P(f"- rtgt0 F2a: {fmt(r, 3)}")
+a = run("G_F3a", D, "Y1g", [("pa", EA, "z")] + B, ["pa"], need=needW)["pa"]
+b_ = run("G_F3b", D, "Y1g", [("pa", EA, "z")] + B + W[:4], ["pa"], need=needW)["pa"]
+P(f"- rtgt0 F3a: {fmt(a)}; F3b: {fmt(b_)}; shrinkage {shrink(a, b_):.0%}")
+r = run("G_M1_Y1", ev, "Y1g", [("mv", "mv", "raw")] + T + [("clock", "clock_hour", "raw")], ["mv"], cond=mcond)["mv"]; P(f"- rtgt0 M1-Y1: {fmt(r)}")
+
+# ===================== False starts / anticipations (descriptive, no PM; added 2026-11-11) =====================
+P("\n## False starts and anticipations (descriptive)")
+D["anyant"] = D.n_anticip > 0; D["p3"] = tobool(D.P3_false_starts).fillna(False).astype(bool)
+P(f"- Sessions with any RT < 100 ms: {int(D.anyant.sum())}/{len(D)} ({D.anyant.mean():.1%}); max per session {int(D.n_anticip.max())}")
+P(f"- P3 (≥ 5 false starts): {int(D.p3.sum())}/{len(D)} ({D.p3.mean():.1%})")
+for cty, g in D.groupby("city"): P(f"  - {cty}: any RT < 100 ms {int(g.anyant.sum())}/{len(g)} ({g.anyant.mean():.1%}); P3 {int(g.p3.sum())} ({g.p3.mean():.1%})")
+fs = D.groupby("pid").agg(n=("anyant", "size"), any_rt_lt100=("anyant", "sum"), p3=("p3", "sum"))
+P("- By rider (any RT < 100 ms / P3 / sessions): " + "; ".join(f"{p_} {int(r_.any_rt_lt100)}/{int(r_.p3)}/{int(r_.n)}" for p_, r_ in fs.iterrows()))
+P(f"- Riders with any anticipation session: {(fs.any_rt_lt100 > 0).sum()}/22; with any P3: {(fs.p3 > 0).sum()}/22")
+FS = fs
 
 # ===================== 20-slot sensitivity (added 2026-11-11, user decision "22 primary, 20 sensitivity", after results) =====================
 P("\n## 20-slot sensitivity (without R12, R14; added after results, user decision Nov 11)")
@@ -579,6 +604,7 @@ LOO.to_csv(os.path.join(A.out, "loo.csv"), index=False)
 curve.to_csv(os.path.join(A.out, "fatigue_curve.csv"))
 rb.to_csv(os.path.join(A.out, "fatigue_rider_bins.csv"), index=False)
 BYR_MOVE.to_csv(os.path.join(A.out, "moving_by_rider.csv"))
+FS.to_csv(os.path.join(A.out, "false_starts_by_rider.csv"))
 SHARE.to_csv(os.path.join(A.out, "band_share_by_rider.csv"))
 pooled = {mid: {f: v for f, v in d.items()} for mid, d in RES.items() if not mid.startswith("O1_loo")}
 json.dump(dict(pooled=pooled, EQ=EQ, M2=M2, nmodels=NMODELS[0], pm_col=PM,

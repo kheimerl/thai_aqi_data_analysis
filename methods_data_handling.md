@@ -36,6 +36,8 @@
 ### 1.3 Peak flow
 - One value per reading (L/min). **Personal best (PB)** = the person's 95th percentile of their own readings ≥ 50 L/min. **%PB** = reading / PB × 100.
 - Period: morning 04:00–13:59, evening 15:00–03:59.
+- **Protocol (user, Nov 11):** on each driving day riders blew 3 times before the shift (morning) and 3 times after it (evening) and typed the best of the three into the portal by hand. Each entered value is therefore treated as a best-of-3 value.
+- **One value per period:** if a rider entered more than one value in the same morning or the same evening of a workday, only the **highest** is used. Personal best is computed from these one-per-period values, so re-entries don't count twice.
 
 ### 1.4 Models
 Per rider: OLS of outcome on exposure plus covariates, with standard errors clustered by test day. Per-rider slopes are then pooled with a random-effects meta-analysis (DerSimonian–Laird, with Hartung–Knapp–Sidik–Jonkman (HKSJ) intervals as the headline because k is ~20). This "two-stage" or mean-group design (Pesaran & Smith 1995) compares each rider only with themselves. That removes stable between-person differences (age, lungs, phone, route) and lets slopes differ by person (gap analysis G1, G2, G11).
@@ -72,7 +74,7 @@ Per rider: OLS of outcome on exposure plus covariates, with standard errors clus
 - **b. The same-day window starts at 04:00 and includes time at home before riding.** That dilutes on-road exposure. **Add an on-shift mean** (GPS shift start → test start) as a pre-specified alternative. For riders, it is the exposure the job causes.
 - **c. No minimum coverage rule.** Coverage is good (1-h window ≥ 50% filled for 94.5% of rider tests; 2.7% empty; same-day < 60 min for 0.5%; after-test < 60 min for 8.4%), but the rule must be written down. **Proposed:** 1 h ≥ 30 min, 4 h ≥ 120 min, same-day ≥ 60 min, after ≥ 60 min. Otherwise the value is missing.
 - **d. The sensor's humidity reading is probably not ambient.** The rider-hour median is 43%, and **no rider-hour exceeds 85%**, which is implausible outdoors in Thailand. It is likely measured inside the sensor housing. **Tell AIT now:** a humidity correction will need external humidity (a meteorological station), not this column. Until then, don't use `rh_*` as a covariate or a humidity flag.
-- **e. Peak flow is mostly a single blow.** Only ~17 sittings have repeat blows, while clinical guidance takes the best of three. Single blows add effort noise and bias towards lower values. This is a limitation, and S1's effort flags can't fix it.
+- **e. Best of three is self-reported (corrected Nov 11).** Riders blew 3 times and typed in the best (user, Nov 11), so each entry is meant to be a best-of-3 value, as clinical guidance asks. The app stores only that one number, so the three blows and their agreement can't be checked, and hand entry can add typing errors. Repeat entries in the same morning or evening are reduced to the highest. This is a limitation to state, not something S1's flags can fix.
 - **f. Phone changes would shift RT.** A new phone can step-change touch latency. **Ask the team** whether riders changed phones. S3 can add a per-rider step-change check on median RT over time; it is exposure-free.
 
 ---
@@ -107,3 +109,17 @@ Per rider: OLS of outcome on exposure plus covariates, with standard errors clus
 | B4 | Does the fatigue gradient differ by age? | Per-rider hours-on-shift slope vs age | Possibly steeper with age; descriptive | S3 |
 
 **Rule for repeating in Chiang Mai** (fixed now, not after seeing results): repeat B1–B4 in Chiang Mai if **either** (i) B1 or B2 shows the expected direction (validity evidence is worth having for both cities, and the pooled n = 22 is the useful sample), **or** (ii) a B3/B4 meta-regression coefficient's 95% CI excludes 0. Either way, ask the team for Chiang Mai sex and birth year now. It's cheap, and analysis will need them for Table 1 anyway. **Height** (and weight) for all riders would allow % predicted peak flow; ask whether it was collected.
+
+## 6. Study days were assigned by the study team (user, 2026-11-16)
+
+- **Design fact:** the days on which riders carried the sensor and did the PVT and peak-flow tests were **randomised by the study team across the testing months**. Riders did not choose their test days.
+- **Schedule as described by the user (Nov 16):** more test days per week early in the study, later about 2–3 days a week, with the weekdays varied from week to week (for example Mon + Wed, then Tue + Fri, or Thu + Sun) so the same weekday was not always used. Weekends were possible.
+- **What the files show (counts only):** rider PVT entries fall on 60 calendar dates (Dec 6, Jan 14, Feb 12, Mar 17, Apr 11), mostly Monday–Friday, often on consecutive days; the sensor export holds about 35 of these dates, shared across riders. **To confirm with the team:** the unit that was randomised (single days, blocks or weeks), whether weekends were excluded, and whether both cities shared one schedule. State that in Methods.
+- **Effect on results: none of the estimates change.** Every model compares a rider's test days with the same rider's other test days, and that holds however the days were picked.
+- **What it improves (wording of limitations):**
+  - Riders did not select into test days by how they felt or by the air, so "self-selection into test days" is not a threat. Remaining selection is only whether a rider complied on an assigned day.
+  - Assigned days are a sample of the season, not the whole season. Exposure summaries describe the sampled days.
+- **What it still limits:**
+  - Lagged and multi-day exposure can't be built from the sensors, because the days between test days were not recorded.
+  - Rest between shifts and late nights are mostly invisible for the same reason.
+  - "Riders did not cut hours on dirtier days" covers assigned, worked days only. A rider may be more likely to work on an assigned study day, and days off can't be seen.

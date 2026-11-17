@@ -145,6 +145,58 @@ def main():
         df["cov_ok_onshift"] = df.pm_onshift_nmin.fillna(0) >= 30
         return df
 
+    def add_night(df):
+        """2026-11-12 (coordinator / S4 'night air -> morning blow'; PEF only; no outcome model).
+        Calendar-day windows (Bangkok local, explicit -7 h), second-weighted mean from minute sums:
+          pm_night00   00:00 of the reading's calendar date -> reading time
+          pm_after24   reading time -> 24:00 of the same calendar date
+          pm_night22   22:00 of the previous calendar date -> reading time; only if the previous date was a
+                       sensing day for this person on this node (>= 60 minutes with PM on that date, and the
+                       previous date inside the same person's roster window on the same sensor), else NA
+        Node = the reading's node (handovers already split by date). pm_calibrated_* twins left empty."""
+        from foundation_ids import assignments
+        asg = assignments()
+        cols = {k: [] for k in ["pm_night00", "pm_night00_nmin", "pm_after24", "pm_after24_nmin",
+                                "pm_night22", "pm_night22_nmin", "prev_day_sensing_min", "pm_prev2224", "pm_prev2224_nmin"]}
+        for r in df.itertuples():
+            v = dict(pm_night00=np.nan, pm_night00_nmin=0, pm_after24=np.nan, pm_after24_nmin=0,
+                     pm_night22=np.nan, pm_night22_nmin=0, prev_day_sensing_min=0, pm_prev2224=np.nan, pm_prev2224_nmin=0)
+            if not pd.isna(r.node):
+                n = nodeobj(int(r.node)); day = pd.Timestamp(r.timestamp_local[:10] if hasattr(r, "timestamp_local") else r.timestamp[:10])
+                d0 = local_to_unix(day); t = r.t
+                w = n.win(d0, t); v.update(pm_night00=w["mean"], pm_night00_nmin=w["n_min"])
+                w = n.win(t, d0 + 86400); v.update(pm_after24=w["mean"], pm_after24_nmin=w["n_min"])
+                prev = day - pd.Timedelta(days=1)
+                v["prev_day_sensing_min"] = n.win(d0 - 86400, d0)["n_min"]
+                same = True
+                if role[r.pid] == "rider":
+                    a = asg[(asg.pid == r.pid) & (asg.sensor == int(r.node))]
+                    same = bool(((a.start <= prev) & (a.end >= prev)).any())
+                if same and v["prev_day_sensing_min"] >= 60:
+                    w = n.win(d0 - 2 * 3600, t); v.update(pm_night22=w["mean"], pm_night22_nmin=w["n_min"])
+                if same:   # 2026-11-12 (S4): 22:00-24:00 of the previous calendar date only; NA when no PM then
+                    w = n.win(d0 - 2 * 3600, d0); v.update(pm_prev2224=w["mean"], pm_prev2224_nmin=w["n_min"])
+            for k in cols: cols[k].append(v[k])
+        for k, x in cols.items(): df[k] = x
+        for c in ["pm_calibrated_night00", "pm_calibrated_after24", "pm_calibrated_night22", "pm_calibrated_prev2224"]:
+            df[c] = np.nan
+        return df
+
+    def add_last_move(df):
+        """2026-11-11 (S4 request): last_move_local for PEF rows, same definition as the v4.2 PVT column
+        (last moving minute of the workday's last sustained-movement run; '' if none or < 30 GPS minutes)."""
+        from foundation_qc_features import workday_info
+        out = []
+        for r in df.itertuples():
+            v = ""
+            if not pd.isna(r.node):
+                wi = workday_info(int(r.node), pd.Timestamp(r.workday))
+                if wi["gps_minutes"] >= 30 and not np.isnan(wi["last_activity"]):
+                    v = str(unix_to_local([wi["last_activity"]])[0])[:16]
+            out.append(v)
+        df["last_move_local"] = out
+        return df
+
     def add_v42(df):
         """v4.2 (2026-11-10, S3 request): home vs on-road split of the workday (PVT only).
         Needs a GPS workday (>= 30 GPS minutes). Shift start / last move = first / last minute of a sustained-movement
@@ -170,6 +222,36 @@ def main():
                             home0 = lm + 60
                     w = n.win(home0, wd1); vals.update(pm_after_home=w["mean"], pm_after_home_nmin=w["n_min"])
             for k in cols: cols[k].append(vals[k])
+        for k, v in cols.items(): df[k] = v
+        return df
+
+    def add_home(df, tcol):
+        """2026-11-12 (coordinator, user-approved): GPS home return and protocol slot (scripts/foundation_home.py,
+        QC_RULES change log 'home return'). Entry time t = PVT test start / PEF reading time. No PM, no outcome."""
+        import foundation_home as FH
+        T = FH.workday_table(); H = pd.read_csv(os.path.join(FH.W, "home_locations.csv"))
+        homes = H[H.home].groupby(["pid", "sensor"]).size().to_dict()
+        TD = {(r.pid, int(r.sensor), pd.Timestamp(r.workday)): r._asdict() for r in T.itertuples()}
+        cols = {k: [] for k in ["home_found", "slot_shift_start_local", "home_return_local", "home_return_censored_short",
+                                "shift_crosses_0400", "protocol_slot", "protocol_slot_reason", "min_since_home_return"]}
+        loc = lambda u: str(unix_to_local([u])[0])[:16] if u == u else ""
+        for r in df.itertuples():
+            t = getattr(r, tcol); node = r.node
+            hf = (not pd.isna(node)) and homes.get((r.pid, int(node)), 0) > 0
+            if pd.isna(node) or pd.isna(r.workday):
+                slot, why, hr, cr, cur = "unclear", "no_sensor", np.nan, np.nan, None
+            elif not hf:
+                slot, why, hr, cr, cur = "unclear", "no_home_found", np.nan, np.nan, None
+            else:
+                slot, why, hr, cr = FH.label(TD, r.pid, node, r.workday, t)
+                cur = TD.get((r.pid, int(node), pd.Timestamp(r.workday)))
+            cols["home_found"].append(hf)
+            cols["slot_shift_start_local"].append(loc(cur["ep_shift_start"]) if cur else "")
+            cols["home_return_local"].append(loc(hr))
+            cols["home_return_censored_short"].append(cur["return_censored_short"] if (cur and hr == hr) else np.nan)
+            cols["shift_crosses_0400"].append(cr)
+            cols["protocol_slot"].append(slot); cols["protocol_slot_reason"].append(why)
+            cols["min_since_home_return"].append((t - hr) / 60 if hr == hr else np.nan)
         for k, v in cols.items(): df[k] = v
         return df
 
@@ -209,6 +291,7 @@ def main():
     hand = dict(zip(C.pid, C.handover)); pvt["sensor_handover_person"] = pvt.pid.map(hand)
     pvt["late_starter_handover"] = pvt.pid.isin(["R12", "R14"])
     drop = ["username", "user", "response_times", "stimulation_times", "all_tap_times", "local_end"]
+    pvt = add_home(pvt, "t0")   # 2026-11-12 additions go last
     out = pvt.drop(columns=drop).rename(columns={"timestamp": "timestamp_end_local", "t0": "test_start_unix", "t1": "test_end_unix"})
     out = out.sort_values(["pid", "test_end_unix"])
     for c in ("test_end_unix", "test_start_unix"):   # S7 audit S1-1: exact integer seconds, not %.6g
@@ -234,9 +317,18 @@ def main():
     pef = pef.merge(FQ.drop(columns=["role", "node", "workday", "peak_flow", "personal_best"]), on=["pid", "timestamp"], how="left")
     pef = pef.merge(WF.drop(columns=["role", "node", "workday"]), on=["pid", "timestamp"], how="left")
     pef = add_v41(pef, "t")
+    pef = add_last_move(pef)
+    pef = add_night(pef)
+    pef = add_home(pef, "t")
     pef["sensor_handover_person"] = pef.pid.map(hand); pef["late_starter_handover"] = pef.pid.isin(["R12", "R14"])
     outf = pef.drop(columns=["username", "user", "local"]).rename(columns={"timestamp": "timestamp_local", "t": "reading_unix"})
     outf["reading_unix"] = outf["reading_unix"].round().astype("int64")   # S7 audit S1-1
+    night = ["pm_night00", "pm_night00_nmin", "pm_after24", "pm_after24_nmin", "pm_night22", "pm_night22_nmin",
+             "prev_day_sensing_min", "pm_calibrated_night00", "pm_calibrated_after24", "pm_calibrated_night22",
+             "pm_prev2224", "pm_prev2224_nmin", "pm_calibrated_prev2224"]
+    home = ["home_found", "slot_shift_start_local", "home_return_local", "home_return_censored_short",
+            "shift_crosses_0400", "protocol_slot", "protocol_slot_reason", "min_since_home_return"]
+    outf = outf[[c for c in outf.columns if c not in night + home] + night + home]   # 2026-11-12 additions go last
     outf.to_csv(os.path.join(FOUND, "linked_v4_pef.csv"), index=False, float_format="%.6g")
     print("pvt rows", len(out), "riders", (out.role == "rider").sum(), "| pef rows", len(outf), "riders", (outf.role == "rider").sum())
 
