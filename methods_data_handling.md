@@ -87,7 +87,7 @@ Per rider: OLS of outcome on exposure plus covariates, with standard errors clus
 | **Time-stratified comparison** (case-crossover logic: compare each test only with the same rider's tests in the same calendar month) | Standard in air-pollution epidemiology for seasonal and trend confounding (G5) | **Yes, as a sensitivity analysis** (rider × month fixed effects), next to the existing within-week FE |
 | Distributed-lag models (e.g. DLNM) | Lagged and cumulative effects (G8) | **No:** the sensor is off between test days, so there's no lag history. State it as a limitation. |
 | Mixed models with random slopes | Common in the cited panels (G1, G2) | Keep two-stage as primary (random-slope fits didn't converge before). Mixed model only as a check if it converges. |
-| Personal vs station exposure | Personal monitors misclassify less than stations (Chatzidiakou 2019; G6) | Strength of the design. Remaining classical error **biases toward the null**: say so when reporting nulls. |
+| Personal vs station exposure | Personal monitors misclassify less than stations (Chatzidiakou 2019; G6) | Strength of the design. Remaining classical error **biases toward the null**: say so when reporting non-significant results. |
 | Humidity and drift correction | Bulot 2019; Hollo 2026; Huang 2022 (G7) | **AIT.** Tell AIT the onboard RH looks internal (§3.2d). Ask whether they correct drift by month. |
 | Negative-control exposure | Lipsitch et al. 2010 | Already used (placebo PM after the test) |
 | Known-groups validity of the outcomes | If the instrument works, known differences should appear: PVT slower with age; peak flow lower in women and with age | **Yes:** the Bangkok pilot (§5) |
