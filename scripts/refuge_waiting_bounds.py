@@ -28,7 +28,7 @@ def hourly_valid():
     nodes = pd.read_csv(os.path.join(ROOT, "foundation", "nodes.csv"))
     home_city = dict(zip(nodes.node, nodes.city))
     h["city"] = np.where(h.lat_median > 17, "CMI", np.where(h.lat_median.notna(), "BKK", h.node.map(home_city)))
-    v = h[(h.minutes_pm >= 10) & (h.pm_mean != 0) & h.pm_mean.notna()]
+    v = h[(h.minutes_pm >= 10) & (h.pm_mean != 0) & h.pm_mean.between(0, 500) & h.person.notna()]
     return v, home_city
 
 
